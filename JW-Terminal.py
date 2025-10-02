@@ -675,7 +675,7 @@ if st.session_state.analysis_run:
     else:
         custom_progress(progress_container, 1.0, "John Wicks Identified.")
 else:
-    custom_progress(progress_container, 0, "Ready to Run.")
+    custom_progress(progress_container, 0, "Find John Wicks.")
 
 # Analysis button
 col_btn = st.columns([1])
