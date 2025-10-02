@@ -144,15 +144,53 @@ st.markdown("""
     }
     .stProgress {
         width: 100%;
+        position: relative;
+        overflow: hidden;
     }
     .stProgress > div > div > div {
         background-color: lime;
         border-radius: 0;
+        position: relative;
+    }
+    .stProgress > div > div > div::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        right: 0;
+        background: linear-gradient(90deg, transparent, rgba(0,255,0,0.6), transparent);
+        animation: matrix-scan 2s linear infinite;
+    }
+    @keyframes matrix-scan {
+        0% {
+            transform: translateX(-100%);
+        }
+        100% {
+            transform: translateX(100%);
+        }
     }
     .stProgress > div > div {
-        background-color: #333;
+        background-color: #111;
         border-radius: 0;
         border: 1px solid lime;
+        position: relative;
+    }
+    .stProgress > div > div::before {
+        content: '█▓▒░ LOADING ░▒▓█';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: rgba(0,255,0,0.5);
+        font-family: 'Courier New', monospace;
+        font-size: 10px;
+        z-index: 1;
+        animation: matrix-glitch 3s linear infinite;
+    }
+    @keyframes matrix-glitch {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
     }
     .stProgress > label {
         color: lime;
@@ -170,12 +208,16 @@ st.markdown("""
         color: lime;
         border: 1px solid lime;
         border-radius: 0;
+        font-family: 'Courier New', monospace;
+        font-size: 12px;
     }
     .stWarning {
         background-color: black;
         color: #FF6B6B;
         border: 1px solid #FF6B6B;
         border-radius: 0;
+        font-family: 'Courier New', monospace;
+        font-size: 12px;
     }
     .stSuccess {
         background-color: black;
@@ -593,6 +635,7 @@ use_cache = False
 
 with col_btn[0]:
     if st.button("I think I'm back", key="run_analysis"):
+        st.session_state.analysis_run = False
         with st.spinner("Running analysis..."):
             st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, tickers_to_use, use_cache)
             st.session_state.analysis_run = True
@@ -607,3 +650,5 @@ if st.session_state.analysis_run:
         # Export
         csv = st.session_state.last_df.to_csv(index=False).encode('utf-8')
         st.download_button("EXPORT CSV", csv, "jw_terminal.csv", "text/csv", key="export")
+    else:
+        st.warning("No results found matching criteria.")
