@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
+import requests
+from io import StringIO
 import json
 import os
 import io
-import subprocess
 
 # Page config
 st.set_page_config(page_title="John Wick Terminal", layout="wide", initial_sidebar_state="collapsed")
@@ -246,20 +247,6 @@ st.markdown("""
 st.markdown("<h1 style='text-align: center; color: lime; font-family: \"Courier New\", monospace; font-size: 16px; font-weight: bold; margin-bottom: 0;'>JOHN WICK TERMINAL</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: lime; font-family: \"Courier New\", monospace; font-size: 12px; font-style: italic; margin-top: 0;'>Si vis pacem, para bellum.</p>", unsafe_allow_html=True)
 
-# Cache files for tickers
-@st.cache_data
-def load_cached_tickers():
-    cache_file = 'tickers_cache.json'
-    if os.path.exists(cache_file):
-        with open(cache_file, 'r') as f:
-            return json.load(f)
-    return []
-
-def save_tickers(tickers):
-    cache_file = 'tickers_cache.json'
-    with open(cache_file, 'w') as f:
-        json.dump(tickers, f)
-
 # Top right controls
 col_ctrls1, col_ctrls2, col_ctrls3 = st.columns([17, 2, 1])
 with col_ctrls2:
@@ -289,89 +276,64 @@ if 'selected_ticker_list' not in st.session_state:
     st.session_state.selected_ticker_list = 'Default'
 if 'show_settings' not in st.session_state:
     st.session_state.show_settings = False
-if 'default_tickers' not in st.session_state:
-    st.session_state.default_tickers = load_cached_tickers()
 
 # Function to save ticker lists
 def save_ticker_lists():
     with open('ticker_lists.json', 'w') as f:
         json.dump(st.session_state.ticker_lists, f)
 
-def push_to_github():
-    try:
-        subprocess.run(['git', 'add', 'tickers_cache.json'], check=True)
-        subprocess.run(['git', 'commit', '-m', 'Update tickers cache'], check=True)
-        subprocess.run(['git', 'push'], check=True)
-        st.success("Pushed updated tickers_cache to GitHub.")
-    except Exception as e:
-        st.warning(f"Could not push to GitHub: {e}. Ensure git is configured with credentials.")
+# Cache files for tickers
+@st.cache_data
+def load_cached_tickers():
+    cache_file = 'tickers_cache.json'
+    if os.path.exists(cache_file):
+        with open(cache_file, 'r') as f:
+            return json.load(f)
+    return []
+
+def save_tickers(tickers):
+    cache_file = 'tickers_cache.json'
+    with open(cache_file, 'w') as f:
+        json.dump(tickers, f)
 
 def get_tickers():
-    all_tickers = []
-    
-    # S&P 500 from Wikipedia
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
     try:
-        sp_table = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]
-        all_tickers.extend(sp_table['Symbol'].tolist())
-    except:
-        pass
-    
-    # S&P 500 from stockanalysis.com
-    try:
-        sp_table = pd.read_html('https://stockanalysis.com/list/sp-500-stocks/')[0]
-        all_tickers.extend(sp_table['Symbol'].tolist())
-    except:
-        pass
-    
-    # Nasdaq-100 from Wikipedia
-    try:
-        nasdaq_tables = pd.read_html('https://en.wikipedia.org/wiki/Nasdaq-100')
+        sp_url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+        sp_response = requests.get(sp_url, headers=headers)
+        sp_table = pd.read_html(StringIO(sp_response.text))[0]
+        sp500 = sp_table['Symbol'].tolist()
+        
+        nasdaq_url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+        nasdaq_response = requests.get(nasdaq_url, headers=headers)
+        nasdaq_tables = pd.read_html(StringIO(nasdaq_response.text))
+        nasdaq100 = []
         for table in nasdaq_tables:
             if 'Ticker' in table.columns:
-                all_tickers.extend(table['Ticker'].tolist())
+                nasdaq100 = table['Ticker'].tolist()
                 break
-    except:
-        pass
-    
-    # Nasdaq-100 from slickcharts
-    try:
-        tables = pd.read_html('https://www.slickcharts.com/nasdaq100')
-        for table in tables:
-            if 'Symbol' in table.columns:
-                all_tickers.extend(table['Symbol'].tolist())
-                break
-    except:
-        pass
-    
-    # High volume ETFs from etfdb.com
-    try:
-        tables = pd.read_html('https://etfdb.com/compare/volume/')
-        for table in tables:
-            if 'Symbol' in table.columns:
-                # Take top 50 high volume ETFs
-                top_etfs = table['Symbol'].head(50).tolist()
-                all_tickers.extend(top_etfs)
-                break
-    except:
-        # Fallback hardcoded high volume ETFs
-        hardcoded_etfs = ['SPY', 'QQQ', 'IWM', 'EEM', 'TLT', 'GLD', 'USO', 'XLF', 'XLE', 'XLI', 'XLB', 'XLY', 'XLP', 'XLU', 'XLK', 'XLV', 'XLI', 'XLRE', 'XLC', 'VXX', 'UVXY', 'TQQQ', 'SQQQ']
-        all_tickers.extend(hardcoded_etfs)
-    
-    # Sector SPDRs hardcoded
-    spdr_sectors = ['XLC', 'XLY', 'XLP', 'XLE', 'XLF', 'XLV', 'XLI', 'XLB', 'XLU', 'XLRE', 'XLK']
-    all_tickers.extend(spdr_sectors)
-    
-    all_tickers = list(set(all_tickers))
-    all_tickers = [t for t in all_tickers if t not in ['BF.B', 'BRK.B']]
-    return all_tickers
+        
+        all_tickers = list(set(sp500 + nasdaq100))
+        all_tickers = [t for t in all_tickers if t not in ['BF.B', 'BRK.B']]
+        return all_tickers
+    except Exception as e:
+        return []
 
-def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, tickers=None):
-    if tickers is None or len(tickers) == 0:
-        return pd.DataFrame()
-    
+def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, tickers=None, use_cache=True):
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    if tickers is None or not use_cache:
+        status_text.text('Fetching fresh ticker list...')
+        progress_bar.progress(0.05)
+        tickers = get_tickers()
+        if not tickers:
+            return pd.DataFrame()
+        save_tickers(tickers)
+        progress_bar.progress(0.1)
+
     date = datetime.strptime(date_str, '%Y-%m-%d').date()
     end_date = (date + timedelta(days=1)).strftime('%Y-%m-%d')
     start_30d = (date - timedelta(days=45)).strftime('%Y-%m-%d')
@@ -632,24 +594,6 @@ if st.session_state.show_settings:
     ticker_list_options = ['Default'] + list(st.session_state.ticker_lists.keys())
     current_list = st.selectbox("Select Ticker List", ticker_list_options, index=ticker_list_options.index(st.session_state.selected_ticker_list) if st.session_state.selected_ticker_list in ticker_list_options else 0)
     
-    st.subheader("Default Tickers Cache")
-    col_fetch1, col_fetch2 = st.columns(2)
-    with col_fetch1:
-        if st.button("Fetch Tickers"):
-            with st.spinner("Fetching new tickers..."):
-                new_tickers = get_tickers()
-                old_len = len(st.session_state.default_tickers)
-                st.session_state.default_tickers = list(set(st.session_state.default_tickers + new_tickers))
-                save_tickers(st.session_state.default_tickers)
-                if len(st.session_state.default_tickers) > old_len:
-                    st.success(f"Added {len(st.session_state.default_tickers) - old_len} new tickers. Total: {len(st.session_state.default_tickers)}")
-                    push_to_github()
-                else:
-                    st.info("No new tickers added.")
-    
-    with col_fetch2:
-        st.info(f"Current cached tickers: {len(st.session_state.default_tickers)}")
-    
     st.subheader("Create New List")
     st.download_button("Download Template", template_csv, "ticker_template.csv", "text/csv")
     with st.form("new_list_form"):
@@ -686,13 +630,14 @@ with col3:
 # Analysis button
 col_btn = st.columns([1])
 selected = st.session_state.selected_ticker_list
-tickers_to_use = st.session_state.default_tickers if selected == 'Default' else st.session_state.ticker_lists.get(selected, [])
+tickers_to_use = None if selected == 'Default' else st.session_state.ticker_lists.get(selected, [])
+use_cache = False
 
 with col_btn[0]:
     if st.button("I think I'm back", key="run_analysis"):
         st.session_state.analysis_run = False
         with st.spinner("Running analysis..."):
-            st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, tickers_to_use)
+            st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, tickers_to_use, use_cache)
             st.session_state.analysis_run = True
             st.rerun()
 
