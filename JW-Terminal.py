@@ -109,11 +109,13 @@ st.markdown("""
         font-size: 10px;
         font-family: 'Courier New', monospace;
         border-radius: 0;
+        text-align: center !important;
     }
     .dataframe tbody td {
         background-color: black;
         color: lime;
         border: none;
+        text-align: center !important;
     }
     .stTabs {
         background-color: black;
@@ -140,61 +142,6 @@ st.markdown("""
         background-color: darkgreen;
         border: 1px solid darkgreen;
         border-radius: 0;
-    }
-    .stProgress {
-        width: 100%;
-        position: relative;
-        overflow: hidden;
-    }
-    .stProgress > div > div > div {
-        background-color: lime;
-        border-radius: 0;
-        position: relative;
-    }
-    .stProgress > div > div > div::after {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        bottom: 0;
-        right: 0;
-        background: linear-gradient(90deg, transparent, rgba(0,255,0,0.6), transparent);
-        animation: matrix-scan 2s linear infinite;
-    }
-    @keyframes matrix-scan {
-        0% {
-            transform: translateX(-100%);
-        }
-        100% {
-            transform: translateX(100%);
-        }
-    }
-    .stProgress > div > div {
-        background-color: #111;
-        border-radius: 0;
-        border: 1px solid lime;
-        position: relative;
-    }
-    .stProgress > div > div::before {
-        content: '█▓▒░ LOADING ░▒▓█';
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        color: rgba(0,255,0,0.5);
-        font-family: 'Courier New', monospace;
-        font-size: 10px;
-        z-index: 1;
-        animation: matrix-glitch 3s linear infinite;
-    }
-    @keyframes matrix-glitch {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.3; }
-    }
-    .stProgress > label {
-        color: lime;
-        font-family: 'Courier New', monospace;
-        font-size: 10px;
     }
     .stAlert {
         background-color: black;
@@ -227,7 +174,7 @@ st.markdown("""
     .stSelectbox > label {
         color: lime;
     }
-    .stTextInput > label {
+    .stTextInputs > label {
         color: lime;
     }
     .stNumberInput > label {
@@ -365,214 +312,251 @@ def get_tickers():
     all_tickers = [t for t in all_tickers if t not in ['BF.B', 'BRK.B']]
     return all_tickers
 
-def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, tickers=None):
-    if tickers is None or len(tickers) == 0:
+def custom_progress(container, value, text):
+    text_color = "lime" if value < 0.5 else "black"
+    html = f"""
+    <div style="
+        width: 100%;
+        height: 25px;
+        background-color: black;
+        border: 2px solid lime;
+        position: relative;
+        border-radius: 0;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+    ">
+        <div style="
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            background-color: lime;
+            width: {int(value * 100)}%;
+            transition: width 0.2s ease;
+        "></div>
+        <span style="
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: {text_color};
+            z-index: 1;
+            white-space: nowrap;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        ">{text}</span>
+    </div>
+    """
+    container.markdown(html, unsafe_allow_html=True)
+
+def process_mode(mode, mode_progress_start, mode_progress_end, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol):
+    def process_local_progress(local_prog):
+        overall = mode_progress_start + (local_prog * (mode_progress_end - mode_progress_start))
+        return overall
+
+    total = len(tickers)
+    custom_progress(progress_container, process_local_progress(0), f'Downloading single-day data for {total} tickers ({mode})...')
+    batch_size = 100
+    batches = [tickers[i:i+batch_size] for i in range(0, len(tickers), batch_size)]
+    all_hist_single = {}
+    download_processed = 0
+    total_batches = len(batches)
+    batch_num = 0
+    for chunk in batches:
+        batch_num += 1
+        custom_progress(progress_container, process_local_progress((download_processed / total) * 0.3), f'Downloading single-day batch {batch_num}/{total_batches} ({mode})...')
+        hist_chunk = yf.download(chunk, start=date_str, end=end_date, group_by='ticker', threads=True, progress=False)
+        for ticker in chunk:
+            if ticker in hist_chunk.columns.get_level_values(0) and not hist_chunk[ticker].empty:
+                all_hist_single[ticker] = hist_chunk[ticker]
+        download_processed += len(chunk)
+
+    custom_progress(progress_container, process_local_progress(0.3), f'Calculating signals... 0% ({mode})')
+    all_data = []
+    calc_processed = 0
+    for ticker in tickers:
+        try:
+            if ticker in all_hist_single:
+                single_data = all_hist_single[ticker]
+                if not single_data.empty:
+                    o = single_data['Open'].iloc[0]
+                    h = single_data['High'].iloc[0]
+                    l = single_data['Low'].iloc[0]
+                    c = single_data['Close'].iloc[0]
+                    v = single_data['Volume'].iloc[0]
+                    
+                    range_pct = ((h - l) / c * 100) if c != 0 else 0
+                    
+                    range_val = (h - l)
+                    if range_val == 0:
+                        close_pct = 0
+                        signal = 'No'
+                    else:
+                        if mode == 'Bullish':
+                            close_pct = ((h - c) / range_val * 100)
+                        else:  # Bearish
+                            close_pct = ((c - l) / range_val * 100)
+                        
+                        percentage_val = percentage / 100
+                        if mode == 'Bullish':
+                            signal = 'Yes' if (o > h - range_val * percentage_val) and (c > h - range_val * percentage_val) else 'No'
+                        else:  # Bearish
+                            signal = 'Yes' if (o < l + range_val * percentage_val) and (c < l + range_val * percentage_val) else 'No'
+                    
+                    all_data.append({
+                        'Ticker': ticker,
+                        'Open': round(o, 2),
+                        'High': round(h, 2),
+                        'Low': round(l, 2),
+                        'Close': round(c, 2),
+                        'Volume': int(v),
+                        'Range %': round(range_pct, 2),
+                        'Close %': round(close_pct, 2),
+                        'Signal': signal,
+                        'JW Mode': mode
+                    })
+        except Exception as e:
+            print(f"Error for {ticker}: {e}")
+            continue
+        
+        calc_processed += 1
+        local_progress = 0.3 + (calc_processed / total) * 0.2  # 20% for calc
+        custom_progress(progress_container, process_local_progress(local_progress), f'Calculating signals... {int((calc_processed / total) * 100)}% ({mode})')
+
+    if not all_data:
+        return pd.DataFrame()
+
+    df_mode = pd.DataFrame(all_data)
+    df_mode = df_mode[df_mode['Signal'] == 'Yes']
+    
+    if df_mode.empty:
+        return pd.DataFrame()
+
+    yes_tickers_mode = df_mode['Ticker'].tolist()
+    custom_progress(progress_container, process_local_progress(0.5), f'Fetching 30D history for {len(yes_tickers_mode)} matching stocks... ({mode})')
+
+    yes_batch_size = 50
+    yes_batches = [yes_tickers_mode[i:i+yes_batch_size] for i in range(0, len(yes_tickers_mode), yes_batch_size)]
+    all_hist_30d = {}
+    fetch_processed = 0
+    yes_total_batches = len(yes_batches)
+    yes_batch_num = 0
+    for yes_chunk in yes_batches:
+        yes_batch_num += 1
+        custom_progress(progress_container, process_local_progress(0.5 + (fetch_processed / len(yes_tickers_mode)) * 0.2), f'Fetching 30D batch {yes_batch_num}/{yes_total_batches} ({mode})...')
+        hist_30d_chunk = yf.download(yes_chunk, start=start_30d, end=end_date, group_by='ticker', threads=True, progress=False)
+        for ticker in yes_chunk:
+            if ticker in hist_30d_chunk.columns.get_level_values(0) and not hist_30d_chunk[ticker].empty:
+                all_hist_30d[ticker] = hist_30d_chunk[ticker]
+        fetch_processed += len(yes_chunk)
+
+    custom_progress(progress_container, process_local_progress(0.7), f'Computing volumes and strength... 0% ({mode})')
+
+    # Initialize columns
+    df_mode['30D Avg Vol'] = 0
+    df_mode['Relative Vol'] = 0.0
+
+    comp_total = len(df_mode)
+    comp_processed = 0
+    for idx, row in df_mode.iterrows():
+        ticker = row['Ticker']
+        try:
+            if ticker in all_hist_30d:
+                full_data = all_hist_30d[ticker]
+                if not full_data.empty:
+                    v = row['Volume']
+                    
+                    volumes = full_data['Volume'].dropna()
+                    single_idx = pd.to_datetime(date_str)
+                    volumes_before = volumes[volumes.index < single_idx]
+                    if len(volumes_before) >= 30:
+                        avg_vol = volumes_before.tail(30).mean()
+                    elif len(volumes_before) > 0:
+                        avg_vol = volumes_before.mean()
+                    else:
+                        avg_vol = 0
+                    
+                    rel_vol = v / avg_vol if avg_vol > 0 else 0
+                    
+                    df_mode.at[idx, '30D Avg Vol'] = int(round(avg_vol, 0)) if avg_vol > 0 else 0
+                    df_mode.at[idx, 'Relative Vol'] = round(rel_vol, 2)
+        except Exception as e:
+            print(f"Error for {ticker} volume: {e}")
+            continue
+        
+        comp_processed += 1
+        local_progress = 0.7 + (comp_processed / comp_total) * 0.3  # 30% for compute
+        custom_progress(progress_container, process_local_progress(local_progress), f'Computing volumes and strength... {int((comp_processed / comp_total) * 100)}% ({mode})')
+
+    df_mode = df_mode[df_mode['30D Avg Vol'] > min_avg_vol * 1000000]
+    df_mode = df_mode[df_mode['Relative Vol'] > min_rel_vol]
+    
+    if df_mode.empty:
         return pd.DataFrame()
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    return df_mode
+
+def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, tickers=None, progress_container=None):
+    if tickers is None or len(tickers) == 0:
+        if progress_container:
+            custom_progress(progress_container, 1.0, "John Wicks Not Identified.")
+        return pd.DataFrame()
+    
+    if progress_container is None:
+        progress_container = st.empty()
+    
+    custom_progress(progress_container, 0, "Initializing analysis...")
     
     date = datetime.strptime(date_str, '%Y-%m-%d').date()
     end_date = (date + timedelta(days=1)).strftime('%Y-%m-%d')
     start_30d = (date - timedelta(days=45)).strftime('%Y-%m-%d')
 
-    def process_mode(mode, mode_progress_start, mode_progress_end):
-        local_progress = 0.0
-        total = len(tickers)
-        status_text.text(f'Downloading single-day data for {total} tickers ({mode})...')
-        batch_size = 100
-        batches = [tickers[i:i+batch_size] for i in range(0, len(tickers), batch_size)]
-        all_hist_single = {}
-        download_processed = 0
-        total_batches = len(batches)
-        batch_num = 0
-        for chunk in batches:
-            batch_num += 1
-            status_text.text(f'Downloading single-day batch {batch_num}/{total_batches} ({mode})...')
-            hist_chunk = yf.download(chunk, start=date_str, end=end_date, group_by='ticker', threads=True, progress=False)
-            for ticker in chunk:
-                if ticker in hist_chunk.columns.get_level_values(0) and not hist_chunk[ticker].empty:
-                    all_hist_single[ticker] = hist_chunk[ticker]
-            download_processed += len(chunk)
-            local_progress = (download_processed / total) * 0.3  # 30% for download
-            overall_progress = mode_progress_start + (local_progress * (mode_progress_end - mode_progress_start))
-            progress_bar.progress(overall_progress)
-
-        status_text.text(f'Calculating signals... 0% ({mode})')
-        all_data = []
-        calc_processed = 0
-        for ticker in tickers:
-            try:
-                if ticker in all_hist_single:
-                    single_data = all_hist_single[ticker]
-                    if not single_data.empty:
-                        o = single_data['Open'].iloc[0]
-                        h = single_data['High'].iloc[0]
-                        l = single_data['Low'].iloc[0]
-                        c = single_data['Close'].iloc[0]
-                        v = single_data['Volume'].iloc[0]
-                        
-                        range_pct = ((h - l) / c * 100) if c != 0 else 0
-                        
-                        range_val = (h - l)
-                        if range_val == 0:
-                            close_pct = 0
-                            signal = 'No'
-                        else:
-                            if mode == 'Bullish':
-                                close_pct = ((h - c) / range_val * 100)
-                            else:  # Bearish
-                                close_pct = ((c - l) / range_val * 100)
-                            
-                            percentage_val = percentage / 100
-                            if mode == 'Bullish':
-                                signal = 'Yes' if (o > h - range_val * percentage_val) and (c > h - range_val * percentage_val) else 'No'
-                            else:  # Bearish
-                                signal = 'Yes' if (o < l + range_val * percentage_val) and (c < l + range_val * percentage_val) else 'No'
-                        
-                        all_data.append({
-                            'Ticker': ticker,
-                            'Open': round(o, 2),
-                            'High': round(h, 2),
-                            'Low': round(l, 2),
-                            'Close': round(c, 2),
-                            'Volume': int(v),
-                            'Range %': round(range_pct, 2),
-                            'Close %': round(close_pct, 2),
-                            'Signal': signal,
-                            'JW Mode': mode
-                        })
-            except Exception as e:
-                print(f"Error for {ticker}: {e}")
-                continue
-            
-            calc_processed += 1
-            local_progress = 0.3 + (calc_processed / total) * 0.2  # 20% for calc
-            overall_progress = mode_progress_start + (local_progress * (mode_progress_end - mode_progress_start))
-            progress_bar.progress(overall_progress)
-
-        if not all_data:
-            return pd.DataFrame()
-
-        df_mode = pd.DataFrame(all_data)
-        df_mode = df_mode[df_mode['Signal'] == 'Yes']
-        
-        if df_mode.empty:
-            return pd.DataFrame()
-
-        yes_tickers_mode = df_mode['Ticker'].tolist()
-        status_text.text(f'Fetching 30D history for {len(yes_tickers_mode)} matching stocks... ({mode})')
-
-        yes_batch_size = 50
-        yes_batches = [yes_tickers_mode[i:i+yes_batch_size] for i in range(0, len(yes_tickers_mode), yes_batch_size)]
-        all_hist_30d = {}
-        fetch_processed = 0
-        yes_total_batches = len(yes_batches)
-        yes_batch_num = 0
-        for yes_chunk in yes_batches:
-            yes_batch_num += 1
-            status_text.text(f'Fetching 30D batch {yes_batch_num}/{yes_total_batches} ({mode})...')
-            hist_30d_chunk = yf.download(yes_chunk, start=start_30d, end=end_date, group_by='ticker', threads=True, progress=False)
-            for ticker in yes_chunk:
-                if ticker in hist_30d_chunk.columns.get_level_values(0) and not hist_30d_chunk[ticker].empty:
-                    all_hist_30d[ticker] = hist_30d_chunk[ticker]
-            fetch_processed += len(yes_chunk)
-            local_progress = 0.5 + (fetch_processed / len(yes_tickers_mode)) * 0.2  # 20% for fetch
-            overall_progress = mode_progress_start + (local_progress * (mode_progress_end - mode_progress_start))
-            progress_bar.progress(overall_progress)
-
-        status_text.text(f'Computing volumes and strength... 0% ({mode})')
-
-        comp_total = len(df_mode)
-        comp_processed = 0
-        for idx, row in df_mode.iterrows():
-            ticker = row['Ticker']
-            try:
-                if ticker in all_hist_30d:
-                    full_data = all_hist_30d[ticker]
-                    if not full_data.empty:
-                        v = row['Volume']
-                        
-                        volumes = full_data['Volume'].dropna()
-                        single_idx = pd.to_datetime(date_str)
-                        volumes_before = volumes[volumes.index < single_idx]
-                        if len(volumes_before) >= 30:
-                            avg_vol = volumes_before.tail(30).mean()
-                        elif len(volumes_before) > 0:
-                            avg_vol = volumes_before.mean()
-                        else:
-                            avg_vol = 0
-                        
-                        rel_vol = v / avg_vol if avg_vol > 0 else 0
-                        
-                        df_mode.at[idx, '30D Avg Vol'] = int(round(avg_vol, 0)) if avg_vol > 0 else 0
-                        df_mode.at[idx, 'Relative Vol'] = round(rel_vol, 2)
-            except Exception as e:
-                print(f"Error for {ticker} volume: {e}")
-                continue
-            
-            comp_processed += 1
-            local_progress = 0.7 + (comp_processed / comp_total) * 0.3  # 30% for compute
-            overall_progress = mode_progress_start + (local_progress * (mode_progress_end - mode_progress_start))
-            progress_bar.progress(overall_progress)
-
-        df_mode = df_mode[df_mode['30D Avg Vol'] > min_avg_vol * 1000000]
-        df_mode = df_mode[df_mode['Relative Vol'] > min_rel_vol]
-        
-        if df_mode.empty:
-            return pd.DataFrame()
-        
-        return df_mode
-
     if filter_mode == 'All':
-        df_bull = process_mode('Bullish', 0.1, 0.55)
-        if not df_bull.empty:
-            df_bear = process_mode('Bearish', 0.55, 1.0)
-        else:
-            df_bear = pd.DataFrame()
-        if df_bull.empty and df_bear.empty:
-            return pd.DataFrame()
+        df_bull = process_mode('Bullish', 0.0, 0.5, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
+        df_bear = process_mode('Bearish', 0.5, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
         df = pd.concat([df_bull, df_bear]) if not df_bear.empty else df_bull
     else:
-        df = process_mode(filter_mode, 0.1, 1.0)
-        if df.empty:
-            return pd.DataFrame()
+        df = process_mode(filter_mode, 0.0, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
 
-    if not df.empty:
-        def range_score(x):
-            if x <= 0.5:
-                return 0
-            elif x <= 1.5:
-                return 5 * (x - 0.5) / 1.0
-            elif x <= 3:
-                return 5 + 2.5 * (x - 1.5) / 1.5
-            elif x <= 5:
-                return 7.5 + 2.5 * (x - 3) / 2.0
-            else:
-                return 10
-        df['Range Score'] = df['Range %'].apply(lambda x: min(10, max(0, range_score(x))))
-        
-        def rel_vol_score(x):
-            if x <= 0.5:
-                return 0
-            elif x <= 0.8:
-                return 2 * (x - 0.5) / 0.3
-            elif x <= 1.0:
-                return 2 + 2 * (x - 0.8) / 0.2
-            elif x <= 1.25:
-                return 4 + 2 * (x - 1.0) / 0.25
-            elif x <= 1.5:
-                return 6 + 1.5 * (x - 1.25) / 0.25
-            elif x <= 2.5:
-                return 7.5 + 2.5 * (x - 1.5) / 1.0
-            else:
-                return 10
-        df['Rel Vol Score'] = df['Relative Vol'].apply(lambda x: min(10, max(0, rel_vol_score(x))))
-        
-        df['Close Score'] = 10 * (1 - (df['Close %'] / percentage))
-        df['Close Score'] = df['Close Score'].clip(lower=0, upper=10)
-        
-        df['Strength'] = round((df['Range Score'] + df['Close Score'] + df['Rel Vol Score']) / 3, 1)
+    if df.empty:
+        custom_progress(progress_container, 1.0, "John Wicks Not Identified.")
+        return pd.DataFrame()
+
+    custom_progress(progress_container, 1.0, "John Wicks Identified.")
+
+    def range_score(x):
+        if x <= 0.5:
+            return 0
+        elif x <= 1.5:
+            return 5 * (x - 0.5) / 1.0
+        elif x <= 3:
+            return 5 + 2.5 * (x - 1.5) / 1.5
+        elif x <= 5:
+            return 7.5 + 2.5 * (x - 3) / 2.0
+        else:
+            return 10
+    df['Range Score'] = df['Range %'].apply(lambda x: min(10, max(0, range_score(x))))
+    
+    def rel_vol_score(x):
+        if x <= 0.5:
+            return 0
+        elif x <= 0.8:
+            return 2 * (x - 0.5) / 0.3
+        elif x <= 1.0:
+            return 2 + 2 * (x - 0.8) / 0.2
+        elif x <= 1.25:
+            return 4 + 2 * (x - 1.0) / 0.25
+        elif x <= 1.5:
+            return 6 + 1.5 * (x - 1.25) / 0.25
+        elif x <= 2.5:
+            return 7.5 + 2.5 * (x - 1.5) / 1.0
+        else:
+            return 10
+    df['Rel Vol Score'] = df['Relative Vol'].apply(lambda x: min(10, max(0, rel_vol_score(x))))
+    
+    df['Close Score'] = 10 * (1 - (df['Close %'] / percentage))
+    df['Close Score'] = df['Close Score'].clip(lower=0, upper=10)
+    
+    df['Strength'] = round((df['Range Score'] + df['Close Score'] + df['Rel Vol Score']) / 3, 1)
 
     df = df.sort_values('Strength', ascending=False)
     
@@ -683,18 +667,26 @@ with col3:
     jw_mode = st.selectbox("JW Mode", ['All', 'Bullish', 'Bearish'], index=0, key="jw_mode")
     min_rel_vol = st.number_input("Min Rel Vol", value=0.9, min_value=0.0, step=0.1, key="min_rel_vol")
 
+progress_container = st.empty()
+
+if st.session_state.analysis_run:
+    if st.session_state.last_df.empty:
+        custom_progress(progress_container, 1.0, "John Wicks Not Identified.")
+    else:
+        custom_progress(progress_container, 1.0, "John Wicks Identified.")
+else:
+    custom_progress(progress_container, 0, "Ready to Run.")
+
 # Analysis button
 col_btn = st.columns([1])
 selected = st.session_state.selected_ticker_list
 tickers_to_use = st.session_state.default_tickers if selected == 'Default' else st.session_state.ticker_lists.get(selected, [])
 
 with col_btn[0]:
-    if st.button("I think I'm back", key="run_analysis"):
-        st.session_state.analysis_run = False
-        with st.spinner("Running analysis..."):
-            st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, tickers_to_use)
-            st.session_state.analysis_run = True
-            st.rerun()
+    if st.button("Fortis Fortuna Adiuvat", key="run_analysis"):
+        st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, tickers_to_use, progress_container)
+        st.session_state.analysis_run = True
+        st.rerun()
 
 # Results table
 if st.session_state.analysis_run:
@@ -705,5 +697,3 @@ if st.session_state.analysis_run:
         # Export
         csv = st.session_state.last_df.to_csv(index=False).encode('utf-8')
         st.download_button("EXPORT CSV", csv, "jw_terminal.csv", "text/csv", key="export")
-    else:
-        st.warning("No results found matching criteria.")
