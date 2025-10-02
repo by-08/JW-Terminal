@@ -598,35 +598,12 @@ with col_btn[0]:
             st.session_state.analysis_run = True
             st.rerun()
 
-# Tabs
-tab1, tab2 = st.tabs(["Main", "History"])
-
-with tab1:
-    if st.session_state.analysis_run:
-        if not st.session_state.last_df.empty:
-            styled_df = style_df(st.session_state.last_df, minimalist)
-            st.dataframe(styled_df, use_container_width=True, hide_index=True)
-            
-            # Export
-            csv = st.session_state.last_df.to_csv(index=False).encode('utf-8')
-            st.download_button("EXPORT CSV", csv, "jw_terminal.csv", "text/csv", key="export")
-
-with tab2:
-    history = st.session_state.history
-    if history:
-        df_hist = pd.DataFrame(history)
-        df_hist['Query_Date'] = pd.to_datetime(df_hist['Query_Date'])
-        df_hist = df_hist.sort_values(['Query_Date', 'Strength'], ascending=[False, False])
-        df_hist['Volume'] = df_hist['Volume'].apply(lambda v: f"{v/1000000:.1f} M" if isinstance(v, (int, float)) and v > 0 else "0.0 M")
-        display_cols = ['Query_Date', 'Ticker', 'Close', 'Volume', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Strength']
-        df_hist_display = df_hist[display_cols].copy()
-        # Apply color to Strength
-        def hist_highlight_strength(val):
-            if isinstance(val, (int, float)):
-                color = get_color(val)
-                return f'color: {color}'
-            return ''
-        styled_hist = df_hist_display.style.applymap(hist_highlight_strength, subset=pd.IndexSlice[:, ['Strength']])
-        st.dataframe(styled_hist, use_container_width=True, hide_index=True)
-    else:
-        pass
+# Results table
+if st.session_state.analysis_run:
+    if not st.session_state.last_df.empty:
+        styled_df = style_df(st.session_state.last_df, minimalist)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        
+        # Export
+        csv = st.session_state.last_df.to_csv(index=False).encode('utf-8')
+        st.download_button("EXPORT CSV", csv, "jw_terminal.csv", "text/csv", key="export")
