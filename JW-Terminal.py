@@ -598,7 +598,7 @@ def style_df(df, minimalist):
         display_columns = ['Ticker', 'Close', 'Volume', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Strength']
         subset = subset[display_columns]
     else:
-        display_columns = ['Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', '30D Avg Vol', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Signal', 'Strength']
+        display_columns = ['Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', '30D Avg Vol', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Strength']
         subset = subset.reindex(columns=[c for c in display_columns if c in subset.columns])
 
     # Apply styling to Strength column
