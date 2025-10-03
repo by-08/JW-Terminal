@@ -383,7 +383,6 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, mi
     custom_progress(progress_container, 0.3, 'Calculating signals... 0%')
     all_data = []
     calc_processed = 0
-    percentage_val = percentage / 100
     for ticker in tickers:
         try:
             if ticker in all_hist_single:
