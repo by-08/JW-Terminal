@@ -186,6 +186,10 @@ st.markdown("""
     .css-1aumxhk {
         text-align: center;
     }
+    /* Ensure all numerical cells are centered */
+    .dataframe td.numeric {
+        text-align: center !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -213,11 +217,11 @@ def save_historical_signals():
         json.dump(st.session_state.history, f, default=str)
 
 # Top right controls
-col_ctrls1, col_history, col_ctrls2, col_ctrls3 = st.columns([16, 1, 2, 1])
+col_ctrls1, col_ctrls2, col_history, col_ctrls3 = st.columns([17, 2, 1, 1])
 with col_ctrls2:
     minimalist = st.checkbox("Minimalist View", key="minimalist")
 with col_history:
-    if st.button("📈", key="history_icon", help="Historical Signals"):
+    if st.button("⚡", key="history_icon", help="Historical Signals"):
         st.session_state.show_history = not st.session_state.show_history
 with col_ctrls3:
     if st.button("⚙️", key="settings_icon", help="Settings"):
@@ -259,12 +263,13 @@ def save_ticker_lists():
     with open('ticker_lists.json', 'w') as f:
         json.dump(st.session_state.ticker_lists, f)
 
-def push_to_github(files):
+def push_to_github(files, show_success=True):
     try:
         subprocess.run(['git', 'add'] + files, check=True)
         subprocess.run(['git', 'commit', '-m', f'Update {" and ".join(files)}'], check=True)
         subprocess.run(['git', 'push'], check=True)
-        st.success(f"Pushed updated {' and '.join(files)} to GitHub.")
+        if show_success:
+            st.success(f"Pushed updated {' and '.join(files)} to GitHub.")
     except Exception as e:
         st.warning(f"Could not push to GitHub: {e}. Ensure git is configured with credentials.")
 
@@ -427,7 +432,7 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
                         'Range %': round(range_pct, 2),
                         'Close %': round(close_pct, 2),
                         'Signal': signal,
-                        'JW Mode': mode
+                        'JW Signal': mode
                     })
         except Exception as e:
             print(f"Error for {ticker}: {e}")
@@ -598,6 +603,28 @@ def get_color(strength):
     b = 0
     return f'rgb({r},{g},{b})'
 
+def highlight_mode(val):
+    if val == 'Bullish':
+        return 'color: lime'
+    elif val == 'Bearish':
+        return 'color: red'
+    return ''
+
+def highlight_t_returns(row):
+    styles = [''] * len(row)
+    signal = row['JW Signal']
+    for i, col in enumerate(row.index):
+        if col in ['T+1', 'T+2', 'T+3', 'T+7'] and pd.notna(row[col]):
+            ret_val = float(row[col])
+            if signal == 'Bullish':
+                color = 'color: lime' if ret_val > 0 else 'color: red'
+            elif signal == 'Bearish':
+                color = 'color: lime' if ret_val < 0 else 'color: red'
+            else:
+                color = ''
+            styles[i] = color
+    return styles
+
 def style_df(df, minimalist):
     def highlight_strength(val):
         if isinstance(val, (int, float)):
@@ -607,19 +634,27 @@ def style_df(df, minimalist):
 
     subset = df.copy()
 
-    subset['Volume'] = subset['Volume'].apply(lambda v: f"{v/1000000:.1f} M" if isinstance(v, (int, float)) and v > 0 else "0.0 M")
+    # Format Volume to M before styling
+    if 'Volume' in subset.columns:
+        subset['Volume'] = subset['Volume'].apply(lambda v: f"{v/1000000:.2f} M" if isinstance(v, (int, float)) and v > 0 else "0.00 M")
     if '30D Avg Vol' in subset.columns:
-        subset['30D Avg Vol'] = subset['30D Avg Vol'].apply(lambda v: f"{v/1000000:.1f} M" if isinstance(v, (int, float)) and v > 0 else "0.0 M")
+        subset['30D Avg Vol'] = subset['30D Avg Vol'].apply(lambda v: f"{v/1000000:.2f} M" if isinstance(v, (int, float)) and v > 0 else "0.00 M")
 
     if minimalist:
-        display_columns = ['Ticker', 'Close', 'Volume', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Strength']
+        display_columns = ['Ticker', 'Close', 'Volume', 'Relative Vol', 'Range %', 'Close %', 'JW Signal', 'Strength']
         subset = subset[display_columns]
     else:
-        display_columns = ['Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', '30D Avg Vol', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Strength']
+        display_columns = ['Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', '30D Avg Vol', 'Relative Vol', 'Range %', 'Close %', 'JW Signal', 'Strength']
         subset = subset.reindex(columns=[c for c in display_columns if c in subset.columns])
 
-    # Apply styling to Strength column
-    subset = subset.style.applymap(highlight_strength, subset=pd.IndexSlice[:, ['Strength']])
+    # Apply styling to Strength and JW Signal columns
+    subset = subset.style.applymap(highlight_strength, subset=pd.IndexSlice[:, ['Strength']]).applymap(highlight_mode, subset=pd.IndexSlice[:, ['JW Signal']])
+
+    # Format numerics to 2 decimals (skip Volume since string)
+    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Range %', 'Close %', 'Relative Vol', 'Strength']
+    format_dict = {col: '{:.2f}' for col in numeric_cols if col in subset.columns}
+
+    subset = subset.format(format_dict)
 
     return subset
 
@@ -630,45 +665,125 @@ template_csv = template_df.to_csv(index=False).encode('utf-8')
 # Historical Signals popup
 if st.session_state.show_history:
     st.markdown("## Historical Signals")
-    with st.spinner('Computing forward returns...'):
+    hist_df = pd.DataFrame(st.session_state.history)
+    if not hist_df.empty:
+        hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
+        hist_df['Filter Settings'] = hist_df['Filter_Settings']
+
+        # Ensure T+ columns exist in history dicts
+        for rec in st.session_state.history:
+            for days in [1, 2, 3, 7]:
+                if f'T+{days}' not in rec:
+                    rec[f'T+{days}'] = None
+
+        # Refresh hist_df
         hist_df = pd.DataFrame(st.session_state.history)
-        if not hist_df.empty:
-            hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
-            display_cols = ['Date', 'Ticker', 'Close', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Strength', 'Filter_Settings']
-            hist_df = hist_df[display_cols].rename(columns={'Filter_Settings': 'Filter Settings'}).copy()
+        hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
+        hist_df['Filter Settings'] = hist_df['Filter_Settings']
+
+        # Buttons
+        col_btn_hist = st.columns([1])
+        with col_btn_hist[0]:
+            compute_clicked = st.button("Run Forward Returns Calculation")
+
+        progress_hist = st.empty()
+
+        if compute_clicked:
             today = datetime.now().date()
-            hist_df['T+1'] = None
-            hist_df['T+2'] = None
-            hist_df['T+3'] = None
             tickers = hist_df['Ticker'].unique()
+            computed = 0
+            total_tickers = len(tickers)
+            custom_progress(progress_hist, 0, "Starting computation...")
             for ticker in tickers:
+                print(f"Processing ticker: {ticker}")
                 ticker_rows = hist_df[hist_df['Ticker'] == ticker]
                 if ticker_rows.empty:
                     continue
-                min_date = min(ticker_rows['Date']) - timedelta(days=3)
-                max_date = today + timedelta(days=1)
+                earliest_date = min(ticker_rows['Date']) - timedelta(days=3)
+                start_str = earliest_date.strftime('%Y-%m-%d')
+                end_str = (today + timedelta(days=10)).strftime('%Y-%m-%d')  # Extend to ensure T+7 data
                 try:
-                    hist_all = yf.download(ticker, start=min_date.strftime('%Y-%m-%d'), end=max_date.strftime('%Y-%m-%d'), progress=False)
+                    hist_all = yf.download(ticker, start=start_str, end=end_str, progress=False, threads=False)
+                    print(f"Downloaded data for {ticker}, shape: {hist_all.shape}, type: {type(hist_all)}")
                     if not hist_all.empty:
-                        hist_all['Date'] = hist_all.index.date
+                        hist_all = hist_all.tz_localize(None) if hist_all.index.tz else hist_all  # Ensure no timezone
                         for idx, row in ticker_rows.iterrows():
                             t_date = row['Date']
-                            for days in [1, 2, 3]:
-                                f_date = t_date + timedelta(days=days)
-                                if f_date > today:
-                                    continue
-                                f_close = hist_all[hist_all['Date'] == f_date]['Close']
-                                if not f_close.empty:
-                                    close_f = f_close.iloc[0]
-                                    ret = (close_f / row['Close'] - 1) * 100
-                                    hist_df.at[idx, f'T+{days}'] = round(ret, 2)
+                            t_close = row['Close']
+                            t_idx = pd.to_datetime(t_date)
+                            print(f"Checking date {t_date} for {ticker}, t_idx: {t_idx}")
+                            if t_idx in hist_all.index:
+                                pos = hist_all.index.get_loc(t_idx)
+                                print(f"Found position {pos} for {t_date}")
+                                if isinstance(pos, slice):
+                                    pos = pos.start
+                                    print(f"Warning: slice returned for {t_date}, using start {pos}")
+                                t_close_verify = hist_all.iloc[pos]['Close']
+                                print(f"Stored close: {t_close}, downloaded: {t_close_verify}")
+                                if abs(float(t_close_verify) - t_close) > 0.01:
+                                    print(f"Warning: Close price mismatch for {ticker} on {t_date}: stored {t_close}, downloaded {t_close_verify}")
+                                for days in [1, 2, 3, 7]:
+                                    if pos + days < len(hist_all):
+                                        f_pos = pos + days
+                                        f_idx = hist_all.index[f_pos]
+                                        close_f = hist_all.iloc[f_pos]['Close']
+                                        ret = (float(close_f) / t_close - 1) * 100
+                                        st.session_state.history[idx][f'T+{days}'] = round(ret, 2)
+                                        print(f"  T+{days}: {f_idx.date()} return {ret:.2f}% (using position {f_pos})")
+                                    else:
+                                        print(f"  Not enough future data for T+{days} on {t_date}")
+                                        st.session_state.history[idx][f'T+{days}'] = None
+                            else:
+                                print(f"Signal date {t_date} not in downloaded data for {ticker}. Available dates: {hist_all.index[:5].tolist()} ... {hist_all.index[-5:].tolist()}")
+                    else:
+                        print(f"No data downloaded for {ticker}")
                 except Exception as e:
                     print(f"Error fetching {ticker}: {e}")
+                    import traceback
+                    print(traceback.format_exc())
                     continue
-            hist_df = hist_df.sort_values('Date', ascending=False)
-            st.dataframe(hist_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("No historical signals yet.")
+                computed += 1
+                custom_progress(progress_hist, computed / total_tickers, f"Processed {computed}/{total_tickers} tickers")
+            custom_progress(progress_hist, 1.0, "Computation complete.")
+
+            save_historical_signals()
+            push_to_github(['historical_signals.json'], show_success=False)
+
+            # Refresh hist_df after updates
+            hist_df = pd.DataFrame(st.session_state.history)
+            hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
+            hist_df['Filter Settings'] = hist_df['Filter_Settings']
+
+            # Ensure columns are numeric
+            for col in ['T+1', 'T+2', 'T+3', 'T+7']:
+                hist_df[col] = pd.to_numeric(hist_df[col], errors='coerce')
+
+        # Rename JW Mode to JW Signal for display
+        if 'JW Mode' in hist_df.columns:
+            hist_df = hist_df.rename(columns={'JW Mode': 'JW Signal'})
+
+        display_cols = ['Date', 'Ticker', 'Close', 'Relative Vol', 'Range %', 'Close %', 'JW Signal', 'Strength', 'Filter Settings', 'T+1', 'T+2', 'T+3', 'T+7']
+        hist_df = hist_df[display_cols].sort_values('Date', ascending=False)
+        def format_return(x):
+            return f"{x:.2f}%" if pd.notna(x) else "N/A"
+        styled_hist = (hist_df.style
+                       .apply(highlight_t_returns, axis=1)
+                       .applymap(highlight_mode, subset=pd.IndexSlice[:, ['JW Signal']])
+                       .format({
+                           'Close': '{:.2f}',
+                           'Relative Vol': '{:.2f}',
+                           'Range %': '{:.2f}',
+                           'Close %': '{:.2f}',
+                           'Strength': '{:.2f}',
+                           'Volume': '{:.2f}',
+                           'T+1': format_return,
+                           'T+2': format_return,
+                           'T+3': format_return,
+                           'T+7': format_return,
+                       }))
+        st.dataframe(styled_hist, use_container_width=True, hide_index=True)
+    else:
+        st.info("No historical signals yet.")
     if st.button("Close"):
         st.session_state.show_history = False
         st.rerun()
@@ -752,7 +867,7 @@ with col_btn[0]:
         st.session_state.analysis_run = True
         if len(st.session_state.history) > old_hist_len:
             save_historical_signals()
-            push_to_github(['historical_signals.json'])
+            push_to_github(['historical_signals.json'], show_success=False)
         st.rerun()
 
 # Results table

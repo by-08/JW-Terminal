@@ -613,16 +613,19 @@ def highlight_mode(val):
 def highlight_t_returns(row):
     styles = [''] * len(row)
     signal = row['JW Signal']
-    for i, col in enumerate(row.index):
-        if col in ['T+1', 'T+2', 'T+3', 'T+7'] and pd.notna(row[col]):
-            ret_val = float(row[col])
-            if signal == 'Bullish':
-                color = 'color: lime' if ret_val > 0 else 'color: red'
-            elif signal == 'Bearish':
-                color = 'color: lime' if ret_val < 0 else 'color: red'
-            else:
-                color = ''
-            styles[i] = color
+    if pd.isna(signal):
+        signal = ''
+    if isinstance(signal, str):
+        for i, col in enumerate(row.index):
+            if col in ['T+1', 'T+2', 'T+3', 'T+7'] and pd.notna(row[col]):
+                ret_val = float(row[col])
+                if signal == 'Bullish':
+                    color = 'color: lime' if ret_val > 0 else 'color: red'
+                elif signal == 'Bearish':
+                    color = 'color: lime' if ret_val < 0 else 'color: red'
+                else:
+                    color = ''
+                styles[i] = color
     return styles
 
 def style_df(df, minimalist):
@@ -758,9 +761,13 @@ if st.session_state.show_history:
             for col in ['T+1', 'T+2', 'T+3', 'T+7']:
                 hist_df[col] = pd.to_numeric(hist_df[col], errors='coerce')
 
-        # Rename JW Mode to JW Signal for display
+        # Handle JW Signal column to avoid duplicates
         if 'JW Mode' in hist_df.columns:
-            hist_df = hist_df.rename(columns={'JW Mode': 'JW Signal'})
+            if 'JW Signal' not in hist_df.columns:
+                hist_df = hist_df.rename(columns={'JW Mode': 'JW Signal'})
+            else:
+                hist_df['JW Signal'] = hist_df['JW Signal'].fillna(hist_df['JW Mode'])
+                hist_df.drop(columns=['JW Mode'], inplace=True)
 
         display_cols = ['Date', 'Ticker', 'Close', 'Relative Vol', 'Range %', 'Close %', 'JW Signal', 'Strength', 'Filter Settings', 'T+1', 'T+2', 'T+3', 'T+7']
         hist_df = hist_df[display_cols].sort_values('Date', ascending=False)
