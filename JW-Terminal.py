@@ -348,7 +348,7 @@ def custom_progress(container, value, text):
     """
     container.markdown(html, unsafe_allow_html=True)
 
-def process_mode(mode, mode_progress_start, mode_progress_end, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol):
+def process_mode(mode, mode_progress_start, mode_progress_end, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol, min_rvolat):
     def process_local_progress(local_prog):
         overall = mode_progress_start + (local_prog * (mode_progress_end - mode_progress_start))
         return overall
@@ -410,7 +410,7 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
                         'Close': round(c, 2),
                         'Volume': int(v),
                         'Range %': round(range_pct, 2),
-                        'Close %': round(close_pct, 2),
+                        'JW %': round(close_pct, 2),
                         'Signal': signal,
                         'JW Mode': mode
                     })
@@ -453,10 +453,12 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
 
     # Initialize columns
     df_mode['30D Avg Vol'] = 0
-    df_mode['Relative Vol'] = 0.0
+    df_mode['rVolume'] = 0.0
+    df_mode['rVolatility'] = 0.0
 
     comp_total = len(df_mode)
     comp_processed = 0
+    single_idx = pd.to_datetime(date_str)
     for idx, row in df_mode.iterrows():
         ticker = row['Ticker']
         try:
@@ -466,7 +468,6 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
                     v = row['Volume']
                     
                     volumes = full_data['Volume'].dropna()
-                    single_idx = pd.to_datetime(date_str)
                     volumes_before = volumes[volumes.index < single_idx]
                     if len(volumes_before) >= 30:
                         avg_vol = volumes_before.tail(30).mean()
@@ -478,7 +479,31 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
                     rel_vol = v / avg_vol if avg_vol > 0 else 0
                     
                     df_mode.at[idx, '30D Avg Vol'] = int(round(avg_vol, 0)) if avg_vol > 0 else 0
-                    df_mode.at[idx, 'Relative Vol'] = round(rel_vol, 2)
+                    df_mode.at[idx, 'rVolume'] = round(rel_vol, 2)
+
+                    # Compute rVolatility
+                    before_data = full_data[full_data.index < single_idx]
+                    if len(before_data) >= 30:
+                        recent_data = before_data.tail(30)
+                    elif len(before_data) > 0:
+                        recent_data = before_data
+                    else:
+                        recent_data = pd.DataFrame()
+
+                    if not recent_data.empty:
+                        highs_recent = recent_data['High']
+                        lows_recent = recent_data['Low']
+                        closes_recent = recent_data['Close']
+                        daily_range_pct = ((highs_recent - lows_recent) / closes_recent) * 100
+                        avg_range_pct = daily_range_pct.mean()
+                    else:
+                        avg_range_pct = 0
+
+                    current_range_pct = row['Range %']
+
+                    r_volatility = current_range_pct / avg_range_pct if avg_range_pct > 0 else 0
+
+                    df_mode.at[idx, 'rVolatility'] = round(r_volatility, 2)
         except Exception as e:
             print(f"Error for {ticker} volume: {e}")
             continue
@@ -488,14 +513,15 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
         custom_progress(progress_container, process_local_progress(local_progress), f'Computing volumes and strength... {int((comp_processed / comp_total) * 100)}% ({mode})')
 
     df_mode = df_mode[df_mode['30D Avg Vol'] > min_avg_vol * 1000000]
-    df_mode = df_mode[df_mode['Relative Vol'] > min_rel_vol]
+    df_mode = df_mode[df_mode['rVolume'] > min_rel_vol]
+    df_mode = df_mode[df_mode['rVolatility'] > min_rvolat]
     
     if df_mode.empty:
         return pd.DataFrame()
     
     return df_mode
 
-def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, tickers=None, progress_container=None):
+def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, min_rvolat, tickers=None, progress_container=None):
     if tickers is None or len(tickers) == 0:
         if progress_container:
             custom_progress(progress_container, 1.0, "John Wicks Not Identified.")
@@ -511,11 +537,11 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, ti
     start_30d = (date - timedelta(days=45)).strftime('%Y-%m-%d')
 
     if filter_mode == 'All':
-        df_bull = process_mode('Bullish', 0.0, 0.5, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
-        df_bear = process_mode('Bearish', 0.5, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
+        df_bull = process_mode('Bullish', 0.0, 0.5, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol, min_rvolat)
+        df_bear = process_mode('Bearish', 0.5, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol, min_rvolat)
         df = pd.concat([df_bull, df_bear]) if not df_bear.empty else df_bull
     else:
-        df = process_mode(filter_mode, 0.0, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
+        df = process_mode(filter_mode, 0.0, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol, min_rvolat)
 
     if df.empty:
         custom_progress(progress_container, 1.0, "John Wicks Not Identified.")
@@ -523,19 +549,6 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, ti
 
     custom_progress(progress_container, 1.0, "John Wicks Identified.")
 
-    def range_score(x):
-        if x <= 0.5:
-            return 0
-        elif x <= 1.5:
-            return 5 * (x - 0.5) / 1.0
-        elif x <= 3:
-            return 5 + 2.5 * (x - 1.5) / 1.5
-        elif x <= 5:
-            return 7.5 + 2.5 * (x - 3) / 2.0
-        else:
-            return 10
-    df['Range Score'] = df['Range %'].apply(lambda x: min(10, max(0, range_score(x))))
-    
     def rel_vol_score(x):
         if x <= 0.5:
             return 0
@@ -551,12 +564,23 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, ti
             return 7.5 + 2.5 * (x - 1.5) / 1.0
         else:
             return 10
-    df['Rel Vol Score'] = df['Relative Vol'].apply(lambda x: min(10, max(0, rel_vol_score(x))))
+    df['Rel Vol Score'] = df['rVolume'].apply(lambda x: min(10, max(0, rel_vol_score(x))))
     
-    df['Close Score'] = 10 * (1 - (df['Close %'] / percentage))
+    def rvol_score(x):
+        if x < 0.7:
+            return 0
+        elif x <= 1.2:
+            return 5 * (x - 0.7) / 0.5
+        elif x <= 2.0:
+            return 5 + 5 * (x - 1.2) / 0.8
+        else:
+            return 10
+    df['rVol Score'] = df['rVolatility'].apply(lambda x: min(10, max(0, rvol_score(x))))
+    
+    df['Close Score'] = 10 * (1 - (df['JW %'] / percentage))
     df['Close Score'] = df['Close Score'].clip(lower=0, upper=10)
     
-    df['Strength'] = round((df['Range Score'] + df['Close Score'] + df['Rel Vol Score']) / 3, 1)
+    df['Strength'] = round((df['rVol Score'] + df['Close Score'] + df['Rel Vol Score']) / 3, 2)
 
     df = df.sort_values('Strength', ascending=False)
     
@@ -590,19 +614,23 @@ def style_df(df, minimalist):
 
     subset = df.copy()
 
-    subset['Volume'] = subset['Volume'].apply(lambda v: f"{v/1000000:.1f} M" if isinstance(v, (int, float)) and v > 0 else "0.0 M")
+    subset['Volume'] = subset['Volume'].apply(lambda v: f"{v/1000000:.2f} M" if isinstance(v, (int, float)) and v > 0 else "0.00 M")
     if '30D Avg Vol' in subset.columns:
-        subset['30D Avg Vol'] = subset['30D Avg Vol'].apply(lambda v: f"{v/1000000:.1f} M" if isinstance(v, (int, float)) and v > 0 else "0.0 M")
+        subset['30D Avg Vol'] = subset['30D Avg Vol'].apply(lambda v: f"{v/1000000:.2f} M" if isinstance(v, (int, float)) and v > 0 else "0.00 M")
 
     if minimalist:
-        display_columns = ['Ticker', 'Close', 'Volume', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Strength']
+        display_columns = ['Ticker', 'Close', 'Volume', 'rVolume', 'rVolatility', 'JW %', 'JW Mode', 'Strength']
         subset = subset[display_columns]
     else:
-        display_columns = ['Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', '30D Avg Vol', 'Relative Vol', 'Range %', 'Close %', 'JW Mode', 'Strength']
+        display_columns = ['Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', '30D Avg Vol', 'rVolume', 'rVolatility', 'JW %', 'JW Mode', 'Strength']
         subset = subset.reindex(columns=[c for c in display_columns if c in subset.columns])
 
+    float_cols = ['Open', 'High', 'Low', 'Close', 'rVolume', 'rVolatility', 'JW %', 'Strength']
+    format_dict = {col: '{:.2f}' for col in float_cols if col in subset.columns}
+    subset = subset.style.format(format_dict)
+
     # Apply styling to Strength column
-    subset = subset.style.applymap(highlight_strength, subset=pd.IndexSlice[:, ['Strength']])
+    subset = subset.applymap(highlight_strength, subset=pd.IndexSlice[:, ['Strength']])
 
     return subset
 
@@ -660,12 +688,13 @@ col1, col2, col3 = st.columns(3)
 with col1:
     date = st.date_input("Date", value=datetime.now().date(), key="date")
     date_str = date.strftime('%Y-%m-%d')
+    min_rvolat = st.number_input("Min rVolatility", value=1.0, min_value=0.0, step=0.1, key="min_rvolat")
 with col2:
     jw_percent = st.number_input("JW %", value=20.0, min_value=0.0, step=1.0, key="jw_percent")
-    min_avg_vol = st.number_input("Min Avg Vol (M)", value=5.0, min_value=0.0, step=0.5, key="min_avg_vol")
+    min_avg_vol = st.number_input("Min aVolume (M)", value=5.0, min_value=0.0, step=0.5, key="min_avg_vol")
 with col3:
     jw_mode = st.selectbox("JW Mode", ['All', 'Bullish', 'Bearish'], index=0, key="jw_mode")
-    min_rel_vol = st.number_input("Min Rel Vol", value=0.9, min_value=0.0, step=0.1, key="min_rel_vol")
+    min_rel_vol = st.number_input("Min rVolume", value=0.9, min_value=0.0, step=0.1, key="min_rel_vol")
 
 progress_container = st.empty()
 
@@ -684,7 +713,7 @@ tickers_to_use = st.session_state.default_tickers if selected == 'Default' else 
 
 with col_btn[0]:
     if st.button("Fortis Fortuna Adiuvat", key="run_analysis"):
-        st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, tickers_to_use, progress_container)
+        st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, min_rvolat, tickers_to_use, progress_container)
         st.session_state.analysis_run = True
         st.rerun()
 
