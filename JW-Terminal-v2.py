@@ -271,7 +271,8 @@ def push_to_github(files, show_success=True):
         if show_success:
             st.success(f"Pushed updated {' and '.join(files)} to GitHub.")
     except Exception as e:
-        st.warning(f"Could not push to GitHub: {e}. Ensure git is configured with credentials.")
+        if show_success:
+            st.warning(f"Could not push to GitHub: {e}. Ensure git is configured with credentials.")
 
 def get_tickers():
     all_tickers = []
