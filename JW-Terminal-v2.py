@@ -667,7 +667,7 @@ template_csv = template_df.to_csv(index=False).encode('utf-8')
 
 # Historical Signals popup
 if st.session_state.show_history:
-    st.markdown("## Historical Signals")
+    st.markdown("")
     hist_df = pd.DataFrame(st.session_state.history)
     if not hist_df.empty:
         hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
@@ -684,82 +684,100 @@ if st.session_state.show_history:
         hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
         hist_df['Filter Settings'] = hist_df['Filter_Settings']
 
+        # Ensure columns are numeric
+        for col in ['T+1', 'T+2', 'T+3', 'T+7']:
+            hist_df[col] = pd.to_numeric(hist_df[col], errors='coerce')
+
         # Buttons
-        col_btn_hist = st.columns([1])
+        col_btn_hist = st.columns([3, 1])
         with col_btn_hist[0]:
-            compute_clicked = st.button("Run Forward Returns Calculation")
+            compute_clicked = st.button("Run Backtest")
+        with col_btn_hist[1]:
+            full_compute_clicked = st.button("Full Refresh")
 
         progress_hist = st.empty()
 
-        if compute_clicked:
+        if compute_clicked or full_compute_clicked:
             today = datetime.now().date()
-            tickers = hist_df['Ticker'].unique()
-            computed = 0
-            total_tickers = len(tickers)
-            custom_progress(progress_hist, 0, "Starting computation...")
-            for ticker in tickers:
-                print(f"Processing ticker: {ticker}")
-                ticker_rows = hist_df[hist_df['Ticker'] == ticker]
-                if ticker_rows.empty:
-                    continue
-                earliest_date = min(ticker_rows['Date']) - timedelta(days=3)
-                start_str = earliest_date.strftime('%Y-%m-%d')
-                end_str = (today + timedelta(days=10)).strftime('%Y-%m-%d')  # Extend to ensure T+7 data
-                try:
-                    hist_all = yf.download(ticker, start=start_str, end=end_str, progress=False, threads=False)
-                    print(f"Downloaded data for {ticker}, shape: {hist_all.shape}, type: {type(hist_all)}")
-                    if not hist_all.empty:
-                        hist_all = hist_all.tz_localize(None) if hist_all.index.tz else hist_all  # Ensure no timezone
-                        for idx, row in ticker_rows.iterrows():
-                            t_date = row['Date']
-                            t_close = row['Close']
-                            t_idx = pd.to_datetime(t_date)
-                            print(f"Checking date {t_date} for {ticker}, t_idx: {t_idx}")
-                            if t_idx in hist_all.index:
-                                pos = hist_all.index.get_loc(t_idx)
-                                print(f"Found position {pos} for {t_date}")
-                                if isinstance(pos, slice):
-                                    pos = pos.start
-                                    print(f"Warning: slice returned for {t_date}, using start {pos}")
-                                t_close_verify = hist_all.iloc[pos]['Close']
-                                print(f"Stored close: {t_close}, downloaded: {t_close_verify}")
-                                if abs(float(t_close_verify) - t_close) > 0.01:
-                                    print(f"Warning: Close price mismatch for {ticker} on {t_date}: stored {t_close}, downloaded {t_close_verify}")
-                                for days in [1, 2, 3, 7]:
-                                    if pos + days < len(hist_all):
-                                        f_pos = pos + days
-                                        f_idx = hist_all.index[f_pos]
-                                        close_f = hist_all.iloc[f_pos]['Close']
-                                        ret = (float(close_f) / t_close - 1) * 100
-                                        st.session_state.history[idx][f'T+{days}'] = round(ret, 2)
-                                        print(f"  T+{days}: {f_idx.date()} return {ret:.2f}% (using position {f_pos})")
-                                    else:
-                                        print(f"  Not enough future data for T+{days} on {t_date}")
-                                        st.session_state.history[idx][f'T+{days}'] = None
-                            else:
-                                print(f"Signal date {t_date} not in downloaded data for {ticker}. Available dates: {hist_all.index[:5].tolist()} ... {hist_all.index[-5:].tolist()}")
-                    else:
-                        print(f"No data downloaded for {ticker}")
-                except Exception as e:
-                    print(f"Error fetching {ticker}: {e}")
-                    import traceback
-                    print(traceback.format_exc())
-                    continue
-                computed += 1
-                custom_progress(progress_hist, computed / total_tickers, f"Processed {computed}/{total_tickers} tickers")
-            custom_progress(progress_hist, 1.0, "Computation complete.")
+            if full_compute_clicked:
+                tickers_to_compute = hist_df['Ticker'].unique()
+                button_text = "Full Refresh"
+            else:
+                tickers_with_none_t7 = hist_df[hist_df['T+7'].isna()]['Ticker'].unique()
+                if len(tickers_with_none_t7) == 0:
+                    pass
+                else:
+                    tickers_to_compute = tickers_with_none_t7
+                    button_text = "Backtest"
 
-            save_historical_signals()
-            push_to_github(['historical_signals.json'], show_success=False)
+            if 'tickers_to_compute' in locals():
+                computed = 0
+                total_tickers = len(tickers_to_compute)
+                custom_progress(progress_hist, 0, f"Starting {button_text}...")
+                for ticker in tickers_to_compute:
+                    print(f"Processing ticker: {ticker}")
+                    ticker_rows = hist_df[hist_df['Ticker'] == ticker]
+                    if ticker_rows.empty:
+                        continue
+                    earliest_date = min(ticker_rows['Date']) - timedelta(days=3)
+                    start_str = earliest_date.strftime('%Y-%m-%d')
+                    end_str = (today + timedelta(days=10)).strftime('%Y-%m-%d')  # Extend to ensure T+7 data
+                    try:
+                        hist_all = yf.download(ticker, start=start_str, end=end_str, progress=False, threads=False)
+                        print(f"Downloaded data for {ticker}, shape: {hist_all.shape}, type: {type(hist_all)}")
+                        if not hist_all.empty:
+                            hist_all = hist_all.tz_localize(None) if hist_all.index.tz else hist_all  # Ensure no timezone
+                            for _, row in ticker_rows.iterrows():
+                                orig_idx = st.session_state.history.index(row.to_dict())
+                                t_date = row['Date']
+                                t_close = row['Close']
+                                t_idx = pd.to_datetime(t_date)
+                                print(f"Checking date {t_date} for {ticker}, t_idx: {t_idx}")
+                                if t_idx in hist_all.index:
+                                    pos = hist_all.index.get_loc(t_idx)
+                                    print(f"Found position {pos} for {t_date}")
+                                    if isinstance(pos, slice):
+                                        pos = pos.start
+                                        print(f"Warning: slice returned for {t_date}, using start {pos}")
+                                    t_close_verify = hist_all.iloc[pos]['Close']
+                                    print(f"Stored close: {t_close}, downloaded: {t_close_verify}")
+                                    if abs(float(t_close_verify) - t_close) > 0.01:
+                                        print(f"Warning: Close price mismatch for {ticker} on {t_date}: stored {t_close}, downloaded {t_close_verify}")
+                                    for days in [1, 2, 3, 7]:
+                                        if pos + days < len(hist_all):
+                                            f_pos = pos + days
+                                            f_idx = hist_all.index[f_pos]
+                                            close_f = hist_all.iloc[f_pos]['Close']
+                                            ret = (float(close_f) / t_close - 1) * 100
+                                            st.session_state.history[orig_idx][f'T+{days}'] = round(ret, 2)
+                                            print(f"  T+{days}: {f_idx.date()} return {ret:.2f}% (using position {f_pos})")
+                                        else:
+                                            print(f"  Not enough future data for T+{days} on {t_date}")
+                                            st.session_state.history[orig_idx][f'T+{days}'] = None
+                                else:
+                                    print(f"Signal date {t_date} not in downloaded data for {ticker}. Available dates: {hist_all.index[:5].tolist()} ... {hist_all.index[-5:].tolist()}")
+                        else:
+                            print(f"No data downloaded for {ticker}")
+                    except Exception as e:
+                        print(f"Error fetching {ticker}: {e}")
+                        import traceback
+                        print(traceback.format_exc())
+                        continue
+                    computed += 1
+                    custom_progress(progress_hist, computed / total_tickers, f"Processed {computed}/{total_tickers} tickers")
+                custom_progress(progress_hist, 1.0, "Computation complete.")
 
-            # Refresh hist_df after updates
-            hist_df = pd.DataFrame(st.session_state.history)
-            hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
-            hist_df['Filter Settings'] = hist_df['Filter_Settings']
+                save_historical_signals()
+                push_to_github(['historical_signals.json'], show_success=False)
 
-            # Ensure columns are numeric
-            for col in ['T+1', 'T+2', 'T+3', 'T+7']:
-                hist_df[col] = pd.to_numeric(hist_df[col], errors='coerce')
+                # Refresh hist_df after updates
+                hist_df = pd.DataFrame(st.session_state.history)
+                hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
+                hist_df['Filter Settings'] = hist_df['Filter_Settings']
+
+                # Ensure columns are numeric
+                for col in ['T+1', 'T+2', 'T+3', 'T+7']:
+                    hist_df[col] = pd.to_numeric(hist_df[col], errors='coerce')
 
         # Handle JW Signal column to avoid duplicates
         if 'JW Mode' in hist_df.columns:
@@ -860,7 +878,7 @@ if st.session_state.analysis_run:
     else:
         custom_progress(progress_container, 1.0, "John Wicks Identified.")
 else:
-    custom_progress(progress_container, 0, "Ready to Run.")
+    custom_progress(progress_container, 0, "Find John Wicks.")
 
 # Analysis button
 col_btn = st.columns([1])
