@@ -383,6 +383,8 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, mi
     custom_progress(progress_container, 0.3, 'Calculating signals... 0%')
     all_data = []
     calc_processed = 0
+    bull_open_threshold = 33
+    bear_open_threshold = 66
     for ticker in tickers:
         try:
             if ticker in all_hist_single:
@@ -398,21 +400,24 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, mi
                     
                     range_val = (h - l)
                     close_pct = 0
+                    open_pct = 0
                     signal = 'No'
                     jw_signal = None
                     jw_pct_display = None
                     if range_val == 0:
                         close_pct = 0
+                        open_pct = 0
                     else:
                         close_pct = ((h - c) / range_val * 100)
+                        open_pct = ((h - o) / range_val * 100)
                     
                     print(f"{date_str} {ticker} JW %: {round(close_pct, 2)}")
                     
-                    if close_pct < percentage:
+                    if close_pct < percentage and open_pct < bull_open_threshold:
                         signal = 'Yes'
                         jw_signal = 'Bullish'
                         jw_pct_display = close_pct
-                    elif close_pct > (100 - percentage):
+                    elif close_pct > (100 - percentage) and open_pct > bear_open_threshold:
                         signal = 'Yes'
                         jw_signal = 'Bearish'
                         jw_pct_display = 100 - close_pct
