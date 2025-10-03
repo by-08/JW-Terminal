@@ -271,7 +271,8 @@ def push_to_github(files, show_success=True):
         if show_success:
             st.success(f"Pushed updated {' and '.join(files)} to GitHub.")
     except Exception as e:
-        st.warning(f"Could not push to GitHub: {e}. Ensure git is configured with credentials.")
+        if show_success:
+            st.warning(f"Could not push to GitHub: {e}. Ensure git is configured with credentials.")
 
 def get_tickers():
     all_tickers = []
@@ -368,7 +369,7 @@ def custom_progress(container, value, text):
     """
     container.markdown(html, unsafe_allow_html=True)
 
-def process_mode(mode, mode_progress_start, mode_progress_end, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol):
+def process_mode(mode, mode_progress_start, mode_progress_end, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol, min_rvolat):
     def process_local_progress(local_prog):
         overall = mode_progress_start + (local_prog * (mode_progress_end - mode_progress_start))
         return overall
@@ -404,8 +405,6 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
                     c = single_data['Close'].iloc[0]
                     v = single_data['Volume'].iloc[0]
                     
-                    range_pct = ((h - l) / c * 100) if c != 0 else 0
-                    
                     range_val = (h - l)
                     if range_val == 0:
                         close_pct = 0
@@ -429,8 +428,7 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
                         'Low': round(l, 2),
                         'Close': round(c, 2),
                         'Volume': int(v),
-                        'Range %': round(range_pct, 2),
-                        'Close %': round(close_pct, 2),
+                        'JW %': round(close_pct, 2),
                         'Signal': signal,
                         'JW Signal': mode
                     })
@@ -473,10 +471,12 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
 
     # Initialize columns
     df_mode['30D Avg Vol'] = 0
-    df_mode['Relative Vol'] = 0.0
+    df_mode['rVolume'] = 0.0
+    df_mode['rVolatility'] = 0.0
 
     comp_total = len(df_mode)
     comp_processed = 0
+    single_idx = pd.to_datetime(date_str)
     for idx, row in df_mode.iterrows():
         ticker = row['Ticker']
         try:
@@ -486,7 +486,6 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
                     v = row['Volume']
                     
                     volumes = full_data['Volume'].dropna()
-                    single_idx = pd.to_datetime(date_str)
                     volumes_before = volumes[volumes.index < single_idx]
                     if len(volumes_before) >= 30:
                         avg_vol = volumes_before.tail(30).mean()
@@ -498,7 +497,23 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
                     rel_vol = v / avg_vol if avg_vol > 0 else 0
                     
                     df_mode.at[idx, '30D Avg Vol'] = int(round(avg_vol, 0)) if avg_vol > 0 else 0
-                    df_mode.at[idx, 'Relative Vol'] = round(rel_vol, 2)
+                    df_mode.at[idx, 'rVolume'] = round(rel_vol, 2)
+                    
+                    # Compute rVolatility
+                    current_range = (row['High'] - row['Low']) / row['Close'] if row['Close'] != 0 else 0
+                    full_data_before = full_data[full_data.index < single_idx]
+                    if not full_data_before.empty:
+                        daily_ranges = ((full_data_before['High'] - full_data_before['Low']) / full_data_before['Close']).dropna()
+                        if len(daily_ranges) >= 30:
+                            avg_range = daily_ranges.tail(30).mean()
+                        elif len(daily_ranges) > 0:
+                            avg_range = daily_ranges.mean()
+                        else:
+                            avg_range = 0
+                    else:
+                        avg_range = 0
+                    rvolat = current_range / avg_range if avg_range > 0 else 0
+                    df_mode.at[idx, 'rVolatility'] = round(rvolat, 2)
         except Exception as e:
             print(f"Error for {ticker} volume: {e}")
             continue
@@ -508,14 +523,15 @@ def process_mode(mode, mode_progress_start, mode_progress_end, progress_containe
         custom_progress(progress_container, process_local_progress(local_progress), f'Computing volumes and strength... {int((comp_processed / comp_total) * 100)}% ({mode})')
 
     df_mode = df_mode[df_mode['30D Avg Vol'] > min_avg_vol * 1000000]
-    df_mode = df_mode[df_mode['Relative Vol'] > min_rel_vol]
+    df_mode = df_mode[df_mode['rVolume'] > min_rel_vol]
+    df_mode = df_mode[df_mode['rVolatility'] > min_rvolat]
     
     if df_mode.empty:
         return pd.DataFrame()
     
     return df_mode
 
-def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, tickers=None, progress_container=None):
+def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, min_rvolat, tickers=None, progress_container=None):
     if tickers is None or len(tickers) == 0:
         if progress_container:
             custom_progress(progress_container, 1.0, "John Wicks Not Identified.")
@@ -531,11 +547,11 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, ti
     start_30d = (date - timedelta(days=45)).strftime('%Y-%m-%d')
 
     if filter_mode == 'All':
-        df_bull = process_mode('Bullish', 0.0, 0.5, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
-        df_bear = process_mode('Bearish', 0.5, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
+        df_bull = process_mode('Bullish', 0.0, 0.5, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol, min_rvolat)
+        df_bear = process_mode('Bearish', 0.5, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol, min_rvolat)
         df = pd.concat([df_bull, df_bear]) if not df_bear.empty else df_bull
     else:
-        df = process_mode(filter_mode, 0.0, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol)
+        df = process_mode(filter_mode, 0.0, 1.0, progress_container, tickers, date_str, percentage, start_30d, end_date, min_avg_vol, min_rel_vol, min_rvolat)
 
     if df.empty:
         custom_progress(progress_container, 1.0, "John Wicks Not Identified.")
@@ -543,20 +559,18 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, ti
 
     custom_progress(progress_container, 1.0, "John Wicks Identified.")
 
-    def range_score(x):
-        if x <= 0.5:
+    def rvolat_score(x):
+        if x <= 0.7:
             return 0
-        elif x <= 1.5:
-            return 5 * (x - 0.5) / 1.0
-        elif x <= 3:
-            return 5 + 2.5 * (x - 1.5) / 1.5
-        elif x <= 5:
-            return 7.5 + 2.5 * (x - 3) / 2.0
+        elif x <= 1.2:
+            return 5 * (x - 0.7) / 0.5
+        elif x <= 2.0:
+            return 5 + 5 * (x - 1.2) / 0.8
         else:
             return 10
-    df['Range Score'] = df['Range %'].apply(lambda x: min(10, max(0, range_score(x))))
+    df['rVolat Score'] = df['rVolatility'].apply(lambda x: min(10, max(0, rvolat_score(x))))
     
-    def rel_vol_score(x):
+    def rvolume_score(x):
         if x <= 0.5:
             return 0
         elif x <= 0.8:
@@ -571,19 +585,19 @@ def process_data(date_str, percentage, filter_mode, min_avg_vol, min_rel_vol, ti
             return 7.5 + 2.5 * (x - 1.5) / 1.0
         else:
             return 10
-    df['Rel Vol Score'] = df['Relative Vol'].apply(lambda x: min(10, max(0, rel_vol_score(x))))
+    df['rVolume Score'] = df['rVolume'].apply(lambda x: min(10, max(0, rvolume_score(x))))
     
-    df['Close Score'] = 10 * (1 - (df['Close %'] / percentage))
+    df['Close Score'] = 10 * (1 - (df['JW %'] / percentage))
     df['Close Score'] = df['Close Score'].clip(lower=0, upper=10)
     
-    df['Strength'] = round((df['Range Score'] + df['Close Score'] + df['Rel Vol Score']) / 3, 1)
+    df['Strength'] = round((df['rVolat Score'] + df['Close Score'] + df['rVolume Score']) / 3, 1)
 
     df = df.sort_values('Strength', ascending=False)
     
     # Save to session state history
     if not df.empty:
         new_records = []
-        filter_settings = f"{percentage}% | {min_avg_vol:.2f} | {min_rel_vol:.2f}"
+        filter_settings = f"{percentage} | {min_avg_vol} | {min_rel_vol} | {min_rvolat}"
         for _, row in df.iterrows():
             rec = row.to_dict()
             rec['Query_Date'] = date_str
@@ -613,16 +627,19 @@ def highlight_mode(val):
 def highlight_t_returns(row):
     styles = [''] * len(row)
     signal = row['JW Signal']
-    for i, col in enumerate(row.index):
-        if col in ['T+1', 'T+2', 'T+3', 'T+7'] and pd.notna(row[col]):
-            ret_val = float(row[col])
-            if signal == 'Bullish':
-                color = 'color: lime' if ret_val > 0 else 'color: red'
-            elif signal == 'Bearish':
-                color = 'color: lime' if ret_val < 0 else 'color: red'
-            else:
-                color = ''
-            styles[i] = color
+    if pd.isna(signal):
+        signal = ''
+    if isinstance(signal, str):
+        for i, col in enumerate(row.index):
+            if col in ['T+1', 'T+2', 'T+3', 'T+7'] and pd.notna(row[col]):
+                ret_val = float(row[col])
+                if signal == 'Bullish':
+                    color = 'color: lime' if ret_val > 0 else 'color: red'
+                elif signal == 'Bearish':
+                    color = 'color: lime' if ret_val < 0 else 'color: red'
+                else:
+                    color = ''
+                styles[i] = color
     return styles
 
 def style_df(df, minimalist):
@@ -641,17 +658,17 @@ def style_df(df, minimalist):
         subset['30D Avg Vol'] = subset['30D Avg Vol'].apply(lambda v: f"{v/1000000:.2f} M" if isinstance(v, (int, float)) and v > 0 else "0.00 M")
 
     if minimalist:
-        display_columns = ['Ticker', 'Close', 'Volume', 'Relative Vol', 'Range %', 'Close %', 'JW Signal', 'Strength']
+        display_columns = ['Ticker', 'Close', 'Volume', 'rVolume', 'rVolatility', 'JW %', 'JW Signal', 'Strength']
         subset = subset[display_columns]
     else:
-        display_columns = ['Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', '30D Avg Vol', 'Relative Vol', 'Range %', 'Close %', 'JW Signal', 'Strength']
+        display_columns = ['Ticker', 'Open', 'High', 'Low', 'Close', 'Volume', '30D Avg Vol', 'rVolume', 'rVolatility', 'JW %', 'JW Signal', 'Strength']
         subset = subset.reindex(columns=[c for c in display_columns if c in subset.columns])
 
     # Apply styling to Strength and JW Signal columns
     subset = subset.style.applymap(highlight_strength, subset=pd.IndexSlice[:, ['Strength']]).applymap(highlight_mode, subset=pd.IndexSlice[:, ['JW Signal']])
 
     # Format numerics to 2 decimals (skip Volume since string)
-    numeric_cols = ['Open', 'High', 'Low', 'Close', 'Range %', 'Close %', 'Relative Vol', 'Strength']
+    numeric_cols = ['Open', 'High', 'Low', 'Close', 'rVolume', 'rVolatility', 'JW %', 'Strength']
     format_dict = {col: '{:.2f}' for col in numeric_cols if col in subset.columns}
 
     subset = subset.format(format_dict)
@@ -664,11 +681,24 @@ template_csv = template_df.to_csv(index=False).encode('utf-8')
 
 # Historical Signals popup
 if st.session_state.show_history:
-    st.markdown("## Historical Signals")
+    st.markdown("")
     hist_df = pd.DataFrame(st.session_state.history)
     if not hist_df.empty:
         hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
         hist_df['Filter Settings'] = hist_df['Filter_Settings']
+
+        # Migrate old columns
+        if 'Close %' in hist_df.columns:
+            hist_df['JW %'] = hist_df['Close %']
+            hist_df.drop(columns=['Close %'], inplace=True)
+        if 'Relative Vol' in hist_df.columns:
+            hist_df['rVolume'] = hist_df['Relative Vol']
+            hist_df.drop(columns=['Relative Vol'], inplace=True)
+        if 'Range %' in hist_df.columns:
+            hist_df.drop(columns=['Range %'], inplace=True)
+        for col in ['rVolume', 'rVolatility', 'JW %']:
+            if col not in hist_df.columns:
+                hist_df[col] = float('nan')
 
         # Ensure T+ columns exist in history dicts
         for rec in st.session_state.history:
@@ -681,88 +711,149 @@ if st.session_state.show_history:
         hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
         hist_df['Filter Settings'] = hist_df['Filter_Settings']
 
+        # Migrate again after refresh
+        if 'Close %' in hist_df.columns:
+            hist_df['JW %'] = hist_df['Close %']
+            hist_df.drop(columns=['Close %'], inplace=True)
+        if 'Relative Vol' in hist_df.columns:
+            hist_df['rVolume'] = hist_df['Relative Vol']
+            hist_df.drop(columns=['Relative Vol'], inplace=True)
+        if 'Range %' in hist_df.columns:
+            hist_df.drop(columns=['Range %'], inplace=True)
+        for col in ['rVolume', 'rVolatility', 'JW %']:
+            if col not in hist_df.columns:
+                hist_df[col] = float('nan')
+
+        # Ensure columns are numeric
+        for col in ['T+1', 'T+2', 'T+3', 'T+7']:
+            hist_df[col] = pd.to_numeric(hist_df[col], errors='coerce')
+
         # Buttons
-        col_btn_hist = st.columns([1])
+        col_btn_hist = st.columns([3, 1])
         with col_btn_hist[0]:
-            compute_clicked = st.button("Run Forward Returns Calculation")
+            compute_clicked = st.button("Run Backtest")
+        with col_btn_hist[1]:
+            full_compute_clicked = st.button("Full Refresh")
 
         progress_hist = st.empty()
 
-        if compute_clicked:
+        if compute_clicked or full_compute_clicked:
             today = datetime.now().date()
-            tickers = hist_df['Ticker'].unique()
-            computed = 0
-            total_tickers = len(tickers)
-            custom_progress(progress_hist, 0, "Starting computation...")
-            for ticker in tickers:
-                print(f"Processing ticker: {ticker}")
-                ticker_rows = hist_df[hist_df['Ticker'] == ticker]
-                if ticker_rows.empty:
-                    continue
-                earliest_date = min(ticker_rows['Date']) - timedelta(days=3)
-                start_str = earliest_date.strftime('%Y-%m-%d')
-                end_str = (today + timedelta(days=10)).strftime('%Y-%m-%d')  # Extend to ensure T+7 data
-                try:
-                    hist_all = yf.download(ticker, start=start_str, end=end_str, progress=False, threads=False)
-                    print(f"Downloaded data for {ticker}, shape: {hist_all.shape}, type: {type(hist_all)}")
-                    if not hist_all.empty:
-                        hist_all = hist_all.tz_localize(None) if hist_all.index.tz else hist_all  # Ensure no timezone
-                        for idx, row in ticker_rows.iterrows():
-                            t_date = row['Date']
-                            t_close = row['Close']
-                            t_idx = pd.to_datetime(t_date)
-                            print(f"Checking date {t_date} for {ticker}, t_idx: {t_idx}")
-                            if t_idx in hist_all.index:
-                                pos = hist_all.index.get_loc(t_idx)
-                                print(f"Found position {pos} for {t_date}")
-                                if isinstance(pos, slice):
-                                    pos = pos.start
-                                    print(f"Warning: slice returned for {t_date}, using start {pos}")
-                                t_close_verify = hist_all.iloc[pos]['Close']
-                                print(f"Stored close: {t_close}, downloaded: {t_close_verify}")
-                                if abs(float(t_close_verify) - t_close) > 0.01:
-                                    print(f"Warning: Close price mismatch for {ticker} on {t_date}: stored {t_close}, downloaded {t_close_verify}")
-                                for days in [1, 2, 3, 7]:
-                                    if pos + days < len(hist_all):
-                                        f_pos = pos + days
-                                        f_idx = hist_all.index[f_pos]
-                                        close_f = hist_all.iloc[f_pos]['Close']
-                                        ret = (float(close_f) / t_close - 1) * 100
-                                        st.session_state.history[idx][f'T+{days}'] = round(ret, 2)
-                                        print(f"  T+{days}: {f_idx.date()} return {ret:.2f}% (using position {f_pos})")
-                                    else:
-                                        print(f"  Not enough future data for T+{days} on {t_date}")
-                                        st.session_state.history[idx][f'T+{days}'] = None
-                            else:
-                                print(f"Signal date {t_date} not in downloaded data for {ticker}. Available dates: {hist_all.index[:5].tolist()} ... {hist_all.index[-5:].tolist()}")
-                    else:
-                        print(f"No data downloaded for {ticker}")
-                except Exception as e:
-                    print(f"Error fetching {ticker}: {e}")
-                    import traceback
-                    print(traceback.format_exc())
-                    continue
-                computed += 1
-                custom_progress(progress_hist, computed / total_tickers, f"Processed {computed}/{total_tickers} tickers")
-            custom_progress(progress_hist, 1.0, "Computation complete.")
+            if full_compute_clicked:
+                tickers_to_compute = hist_df['Ticker'].unique()
+                button_text = "Full Refresh"
+            else:
+                tickers_with_none_t7 = hist_df[hist_df['T+7'].isna()]['Ticker'].unique()
+                if len(tickers_with_none_t7) == 0:
+                    pass
+                else:
+                    tickers_to_compute = tickers_with_none_t7
+                    button_text = "Backtest"
 
-            save_historical_signals()
-            push_to_github(['historical_signals.json'], show_success=False)
+            if 'tickers_to_compute' in locals():
+                computed = 0
+                total_tickers = len(tickers_to_compute)
+                custom_progress(progress_hist, 0, f"Starting {button_text}...")
+                for ticker in tickers_to_compute:
+                    print(f"Processing ticker: {ticker}")
+                    ticker_rows = hist_df[hist_df['Ticker'] == ticker]
+                    if ticker_rows.empty:
+                        continue
+                    earliest_date = min(ticker_rows['Date']) - timedelta(days=3)
+                    start_str = earliest_date.strftime('%Y-%m-%d')
+                    end_str = (today + timedelta(days=10)).strftime('%Y-%m-%d')  # Extend to ensure T+7 data
+                    try:
+                        hist_all = yf.download(ticker, start=start_str, end=end_str, progress=False, threads=False)
+                        print(f"Downloaded data for {ticker}, shape: {hist_all.shape}, type: {type(hist_all)}")
+                        if not hist_all.empty:
+                            hist_all = hist_all.tz_localize(None) if hist_all.index.tz else hist_all  # Ensure no timezone
+                            for _, row in ticker_rows.iterrows():
+                                # Find the corresponding record index in history
+                                rec_idx = None
+                                for k, rec in enumerate(st.session_state.history):
+                                    if (rec['Ticker'] == ticker and 
+                                        rec['Query_Date'] == row['Query_Date']):
+                                        rec_idx = k
+                                        break
+                                if rec_idx is None:
+                                    print(f"Could not find record for {ticker} on {row['Query_Date']}")
+                                    continue
 
-            # Refresh hist_df after updates
-            hist_df = pd.DataFrame(st.session_state.history)
-            hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
-            hist_df['Filter Settings'] = hist_df['Filter_Settings']
+                                t_date = row['Date']
+                                t_close_stored = row['Close']
+                                t_idx = pd.to_datetime(t_date)
+                                print(f"Checking date {t_date} for {ticker}, t_idx: {t_idx}")
+                                if t_idx in hist_all.index:
+                                    pos = hist_all.index.get_loc(t_idx)
+                                    print(f"Found position {pos} for {t_date}")
+                                    if isinstance(pos, slice):
+                                        pos = pos.start
+                                        print(f"Warning: slice returned for {t_date}, using start {pos}")
+                                    t_close_verify = hist_all.iloc[pos]['Close']
+                                    print(f"Stored close: {t_close_stored}, downloaded: {t_close_verify}")
+                                    if abs(float(t_close_verify) - t_close_stored) > 0.01:
+                                        print(f"Warning: Close price mismatch for {ticker} on {t_date}: stored {t_close_stored}, downloaded {t_close_verify}")
+                                        # Update stored close to match downloaded
+                                        st.session_state.history[rec_idx]['Close'] = round(float(t_close_verify), 2)
+                                    t_close = float(t_close_verify)  # Use verified close for calculation
+                                    for days in [1, 2, 3, 7]:
+                                        if pos + days < len(hist_all):
+                                            f_pos = pos + days
+                                            f_idx = hist_all.index[f_pos]
+                                            close_f = hist_all.iloc[f_pos]['Close']
+                                            ret = (float(close_f) / t_close - 1) * 100
+                                            st.session_state.history[rec_idx][f'T+{days}'] = round(ret, 2)
+                                            print(f"  T+{days}: {f_idx.date()} return {ret:.2f}% (using position {f_pos})")
+                                        else:
+                                            print(f"  Not enough future data for T+{days} on {t_date}")
+                                            st.session_state.history[rec_idx][f'T+{days}'] = None
+                                else:
+                                    print(f"Signal date {t_date} not in downloaded data for {ticker}. Available dates: {hist_all.index[:5].tolist()} ... {hist_all.index[-5:].tolist()}")
+                        else:
+                            print(f"No data downloaded for {ticker}")
+                    except Exception as e:
+                        print(f"Error fetching {ticker}: {e}")
+                        import traceback
+                        print(traceback.format_exc())
+                        continue
+                    computed += 1
+                    custom_progress(progress_hist, computed / total_tickers, f"Processed {computed}/{total_tickers} tickers")
+                custom_progress(progress_hist, 1.0, "Computation complete.")
 
-            # Ensure columns are numeric
-            for col in ['T+1', 'T+2', 'T+3', 'T+7']:
-                hist_df[col] = pd.to_numeric(hist_df[col], errors='coerce')
+                save_historical_signals()
+                push_to_github(['historical_signals.json'], show_success=False)
 
-        # Rename JW Mode to JW Signal for display
+                # Refresh hist_df after updates
+                hist_df = pd.DataFrame(st.session_state.history)
+                hist_df['Date'] = pd.to_datetime(hist_df['Query_Date']).dt.date
+                hist_df['Filter Settings'] = hist_df['Filter_Settings']
+
+                # Migrate again
+                if 'Close %' in hist_df.columns:
+                    hist_df['JW %'] = hist_df['Close %']
+                    hist_df.drop(columns=['Close %'], inplace=True)
+                if 'Relative Vol' in hist_df.columns:
+                    hist_df['rVolume'] = hist_df['Relative Vol']
+                    hist_df.drop(columns=['Relative Vol'], inplace=True)
+                if 'Range %' in hist_df.columns:
+                    hist_df.drop(columns=['Range %'], inplace=True)
+                for col in ['rVolume', 'rVolatility', 'JW %']:
+                    if col not in hist_df.columns:
+                        hist_df[col] = float('nan')
+
+                # Ensure columns are numeric
+                for col in ['T+1', 'T+2', 'T+3', 'T+7']:
+                    hist_df[col] = pd.to_numeric(hist_df[col], errors='coerce')
+
+        # Handle JW Signal column to avoid duplicates
         if 'JW Mode' in hist_df.columns:
-            hist_df = hist_df.rename(columns={'JW Mode': 'JW Signal'})
+            if 'JW Signal' not in hist_df.columns:
+                hist_df = hist_df.rename(columns={'JW Mode': 'JW Signal'})
+            else:
+                hist_df['JW Signal'] = hist_df['JW Signal'].fillna(hist_df['JW Mode'])
+                hist_df.drop(columns=['JW Mode'], inplace=True)
 
-        display_cols = ['Date', 'Ticker', 'Close', 'Relative Vol', 'Range %', 'Close %', 'JW Signal', 'Strength', 'Filter Settings', 'T+1', 'T+2', 'T+3', 'T+7']
+        display_cols = ['Date', 'Ticker', 'Close', 'rVolume', 'rVolatility', 'JW %', 'JW Signal', 'Strength', 'Filter Settings', 'T+1', 'T+2', 'T+3', 'T+7']
         hist_df = hist_df[display_cols].sort_values('Date', ascending=False)
         def format_return(x):
             return f"{x:.2f}%" if pd.notna(x) else "N/A"
@@ -771,9 +862,9 @@ if st.session_state.show_history:
                        .applymap(highlight_mode, subset=pd.IndexSlice[:, ['JW Signal']])
                        .format({
                            'Close': '{:.2f}',
-                           'Relative Vol': '{:.2f}',
-                           'Range %': '{:.2f}',
-                           'Close %': '{:.2f}',
+                           'rVolume': '{:.2f}',
+                           'rVolatility': '{:.2f}',
+                           'JW %': '{:.2f}',
                            'Strength': '{:.2f}',
                            'Volume': '{:.2f}',
                            'T+1': format_return,
@@ -838,12 +929,13 @@ col1, col2, col3 = st.columns(3)
 with col1:
     date = st.date_input("Date", value=datetime.now().date(), key="date")
     date_str = date.strftime('%Y-%m-%d')
+    min_rvolat = st.number_input("Min rVolatility", value=1.0, min_value=0.0, step=0.1, key="min_rvolat")
 with col2:
     jw_percent = st.number_input("JW %", value=20.0, min_value=0.0, step=1.0, key="jw_percent")
-    min_avg_vol = st.number_input("Min Avg Vol (M)", value=5.0, min_value=0.0, step=0.5, key="min_avg_vol")
+    min_avg_vol = st.number_input("Min aVolume (M)", value=5.0, min_value=0.0, step=0.5, key="min_avg_vol")
 with col3:
     jw_mode = st.selectbox("JW Mode", ['All', 'Bullish', 'Bearish'], index=0, key="jw_mode")
-    min_rel_vol = st.number_input("Min Rel Vol", value=0.9, min_value=0.0, step=0.1, key="min_rel_vol")
+    min_rel_vol = st.number_input("Min rVolume", value=0.9, min_value=0.0, step=0.1, key="min_rel_vol")
 
 progress_container = st.empty()
 
@@ -853,7 +945,7 @@ if st.session_state.analysis_run:
     else:
         custom_progress(progress_container, 1.0, "John Wicks Identified.")
 else:
-    custom_progress(progress_container, 0, "Ready to Run.")
+    custom_progress(progress_container, 0, "Find John Wicks.")
 
 # Analysis button
 col_btn = st.columns([1])
@@ -863,7 +955,7 @@ tickers_to_use = st.session_state.default_tickers if selected == 'Default' else 
 with col_btn[0]:
     old_hist_len = len(st.session_state.history)
     if st.button("Fortis Fortuna Adiuvat", key="run_analysis"):
-        st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, tickers_to_use, progress_container)
+        st.session_state.last_df = process_data(date_str, jw_percent, jw_mode, min_avg_vol, min_rel_vol, min_rvolat, tickers_to_use, progress_container)
         st.session_state.analysis_run = True
         if len(st.session_state.history) > old_hist_len:
             save_historical_signals()
